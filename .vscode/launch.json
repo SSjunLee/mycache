@@ -10,7 +10,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${workspaceRoot}/main/main.go",
-            "args": ["-port","8003","-api","1"]
+            "args": ["-api","1"]
         }
     ]
 }

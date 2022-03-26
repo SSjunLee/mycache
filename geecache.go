@@ -3,6 +3,7 @@ package mycache
 import (
 	"fmt"
 	"log"
+	"mycache/singleflight"
 	"sync"
 )
 
@@ -21,6 +22,7 @@ type Group struct {
 	getter    Getter
 	maincache cache
 	peers     PeerPicker
+	loader    *singleflight.Group
 }
 
 var (
@@ -45,6 +47,7 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 		name:      name,
 		getter:    getter, //当缓存未命中时，应该从哪里获取数据源
 		maincache: cache{cacheBytes: cacheBytes},
+		loader:    &singleflight.Group{}, //防止缓存击穿
 	}
 	groups[name] = g
 	return g
@@ -69,18 +72,27 @@ func (g *Group) Get(k string) (value ByteView, err error) {
 
 }
 
-func (g *Group) load(k string) (bv ByteView, err error) {
-	if g.peers != nil {
-		//远程加载key
-		peerGetter, ok := g.peers.PickPeer(k)
-		if ok {
-			if bv, err = g.getFromPeer(peerGetter, k); err == nil {
-				return bv, nil
+//从远程加载key，如果key不在其他节点的缓存中，则查数据库
+func (g *Group) load(k string) (ByteView, error) {
+	//保证这个流程在未执行完之前只会被执行一次
+	bvi, err := g.loader.Do(k, func() (interface{}, error) {
+		if g.peers != nil {
+			//远程加载key
+			peerGetter, ok := g.peers.PickPeer(k)
+			if ok {
+				bv, err := g.getFromPeer(peerGetter, k)
+				if err == nil {
+					return bv, nil
+				}
+				log.Println("[GeeCache] Failed to get from peer", err)
 			}
-			log.Println("[GeeCache] Failed to get from peer", err)
 		}
+		return g.getLocally(k)
+	})
+	if err == nil && bvi != nil {
+		return bvi.(ByteView), nil
 	}
-	return g.getLocally(k)
+	return ByteView{}, err
 }
 
 /**

@@ -75,6 +75,7 @@ func (p *HttpPool) Set(peers ...string) {
 func (p *HttpPool) PickPeer(key string) (PeerGetter, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	log.Println(p.self, " pick peer...")
 	peer := p.peers.Get(key)
 	if peer != "" && peer != p.self {
 		return p.httpGetters[peer], true

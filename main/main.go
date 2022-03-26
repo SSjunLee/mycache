@@ -14,9 +14,9 @@ var db = map[string]string{
 	"Sam":  "567",
 }
 
-func createGroup() *mycache.Group {
+func createGroupAndPicker(addr string, addrs []string) (*mycache.Group, http.Handler) {
 	//name string, cacheBytes int64, getter Getter
-	return mycache.NewGroup("source", 2<<10, mycache.GetterFunc(func(key string) ([]byte, error) {
+	gee := mycache.NewGroup("source", 2<<10, mycache.GetterFunc(func(key string) ([]byte, error) {
 		log.Println("[SlowDB] search key", key)
 		v, ok := db[key]
 		if !ok {
@@ -24,12 +24,13 @@ func createGroup() *mycache.Group {
 		}
 		return []byte(v), nil
 	}))
-}
-
-func startCacheServer(addr string, addrs []string, gee *mycache.Group) {
 	picker := mycache.NewHttpPool(addr)
 	gee.RegisterPeers(picker)
 	picker.Set(addrs...)
+	return gee, picker
+}
+
+func startCacheServer(addr string, picker http.Handler) {
 	log.Println("geecache is running at", addr)
 	log.Fatal(http.ListenAndServe(addr[7:], picker))
 }
@@ -37,9 +38,9 @@ func startCacheServer(addr string, addrs []string, gee *mycache.Group) {
 func startApiServer(apiAddr string, gee *mycache.Group) {
 	http.Handle("/api", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.URL.Query().Get("key")
-		bv, err := gee.Get(key) //查本机lru缓存
+		bv, err := gee.Get(key)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError) //当前机器缓存不存在该key
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -63,14 +64,23 @@ func main() {
 		8002: "http://localhost:8002",
 		8003: "http://localhost:8003",
 	}
+
 	var addrs []string
 	for _, ipaddr := range addrMap {
 		addrs = append(addrs, ipaddr)
 	}
-	gee := createGroup()
-	if api {
-		go startApiServer(apiAddr, gee)
-	}
-	startCacheServer(addrMap[port], addrs, gee)
 
+	var serverAddr string
+	if api {
+		serverAddr = apiAddr
+	} else {
+		serverAddr = addrMap[port]
+	}
+
+	gee, picker := createGroupAndPicker(serverAddr, addrs)
+	if api {
+		startApiServer(serverAddr, gee)
+	} else {
+		startCacheServer(serverAddr, picker)
+	}
 }
